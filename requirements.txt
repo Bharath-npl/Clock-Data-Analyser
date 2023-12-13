@@ -3,5 +3,3 @@ pandas
 matplotlib
 streamlit
 plotly
-io
-re
