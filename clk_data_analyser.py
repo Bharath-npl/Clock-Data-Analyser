@@ -35,24 +35,15 @@ def parse_clock_data(file_objects):
                 split_line = line.strip().split()
 
                 # Check for step data format
-                if len(split_line) >= 1 and "." in split_line[0] and re.match(r'^\d{5}\.\d{2}$', split_line[0]):
-                    if len(split_line) >= 2 and re.match(r'^\d{7}$', split_line[1]):
-                        step_match = re.match(r'(\d{5}\.\d{2})\s+(\d{7})\s+(-?\d+\.\d)\s+(-?\d+\.\d{3})\s+(\w+)\s+(\d{5})', line)
-                        if step_match:
-                            step_frames.append(step_match.groups())
-                        else:
-                            st.error(f"Step correction format is incorrect in file: {file_object.name}")
-                            break
+                if len(split_line) >= 2 and re.match(r'^\d{5}\.\d{2}$', split_line[0]) and re.match(r'^\d{7}$', split_line[1]):
+                    # Extract data with regex
+                    step_match = re.match(r'(\d{5}\.\d{2})\s+(\d{7})\s+([+-]?\d+\.\d+)\s+([+-]?\d+\.\d+)\s+(\w+)\s+(\d{5})', line)
+                    if step_match:
+                        step_frames.append(step_match.groups())
                     else:
-                        st.error(f"Incorrect step correction format in file: {file_object.name}")
-                        break
-
-                # Check for empty or incomplete clock data lines
-                elif len(split_line) < 2 or (len(split_line) == 2 and not split_line[1].isdigit()):
-                    st.error(f"Please remove the empty or incomplete lines in the clock data format in file: {file_object.name}")
-                    break
-
-                else:
+                        st.error(f"Step correction format is incorrect in file: {file_object.name}")
+                        continue
+                elif len(split_line) >= 2:
                     # Regular clock data parsing
                     colspecs = [(0, 5), (6, 11)]
                     i = 12
@@ -78,31 +69,40 @@ def parse_clock_data(file_objects):
 
 # Method to apply corrections to the data
 
-def apply_corrections(combined_df, step_data, time_step_selection, freq_step_selection):
-    # Iterate over each step correction entry
-    for index, step_row in step_data.iterrows():
-        step_mjd = step_row['MJD']
-        time_step = step_row['Time_Step']
-        freq_step = step_row['Frequency_Step']
+def apply_corrections(combined_df, step_data, time_step_selection, freq_step_selection, counter):
+    # Ensure MJD in combined_df is numeric
+    combined_df['MJD'] = pd.to_numeric(combined_df['MJD'], errors='coerce')
 
-        # Select data points before the step correction MJD
-        before_step = combined_df['MJD'] < step_mjd
+    if step_data is not None:
+        # Apply corrections up to the specified counter
+        for index, step_row in step_data.iterrows():
+            if index >= counter:  # Stop applying corrections once the counter limit is reached
+                break
 
-        if time_step_selection != "Not Apply":
-            # Apply or reverse the Time Step correction
-            correction_factor = -time_step if time_step_selection == "Apply Reverse" else time_step
-            combined_df.loc[before_step, 'Clock_Diff'] += correction_factor
+            # Convert step MJD and correction values to numeric
+            step_mjd = pd.to_numeric(step_row['MJD'], errors='coerce')
+            time_step = pd.to_numeric(step_row['Time_Step'], errors='coerce')
+            freq_step = pd.to_numeric(step_row['Frequency_Step'], errors='coerce')
 
-        if freq_step_selection != "Not Apply":
-            # Apply or reverse the Frequency Step correction
-            correction_factor = -freq_step if freq_step_selection == "Apply Reverse" else freq_step
+            # Select data points before the step correction MJD
+            before_step = combined_df['MJD'] < step_mjd
 
-            # Calculate delta_t in days and apply Frequency Step correction
-            combined_df.loc[before_step, 'Clock_Diff'] += correction_factor * (step_mjd - combined_df.loc[before_step, 'MJD'])
+            if time_step_selection != "Not Apply":
+                # Apply or reverse the Time Step correction
+                correction_factor = -time_step if time_step_selection == "Apply Reverse" else time_step
+                combined_df.loc[before_step, 'Clock_Diff'] += correction_factor
+
+            if freq_step_selection != "Not Apply":
+                # Apply or reverse the Frequency Step correction
+                correction_factor = -freq_step if freq_step_selection == "Apply Reverse" else freq_step
+                # Calculate delta_t in days and apply Frequency Step correction
+                combined_df.loc[before_step, 'Clock_Diff'] += correction_factor * (step_mjd - combined_df.loc[before_step, 'MJD'])
+
+    return combined_df
 
 
 # Function to plot MJD vs Clock Differences for a given TAI code
-def plot_clock_differences(df, tai_code, step_data=None, step_correction_options = None):
+def plot_clock_differences(df, tai_code, step_data=None, step_correction_options= None,step_correction_counter=0):
     fig = go.Figure()
 
     # Dynamically find TAI code columns
@@ -135,7 +135,7 @@ def plot_clock_differences(df, tai_code, step_data=None, step_correction_options
 
     if step_data is not None and step_correction_options is not None:
         # Apply the step corrections based on user selection
-        combined_df = apply_corrections(combined_df, step_data, *step_correction_options)
+        combined_df = apply_corrections(combined_df, step_data, *step_correction_options, step_correction_counter)
 
 
     # Linear and quadratic fit
@@ -148,14 +148,23 @@ def plot_clock_differences(df, tai_code, step_data=None, step_correction_options
 
     # Streamlit widget for selecting residual type
     # Streamlit widget for selecting residual type
+    # Streamlit widget for selecting residual type in column format
+    # with st.container():
+    #     st.write("Select the type of residual to display:")  # Label
+    #     residual_type = st.radio( "",('None', 'Linear Residuals', 'Quadratic Residuals'), key="residual_type" )
+
+    # with st.container():
+    #     # Use markdown with HTML to control spacing
+    #     st.markdown("#### Select the type of residual to display:", unsafe_allow_html=True)
+    #     residual_type = st.radio("", ('None', 'Linear Residuals', 'Quadratic Residuals'), key="residual_type")
+        
     residual_type = st.radio(
-        "Select the type of residual to display:",
-        ('None', 'Linear Residuals', 'Quadratic Residuals'),
+        "Select the type of Data to display:",
+        ('Clock Data', 'Linear Residuals', 'Quadratic Residuals'),
         key="residual_type"
     )
-
     # Use the residual_type to plot the data
-    if residual_type == 'None':
+    if residual_type == 'Clock Data':
         fig.add_trace(go.Scatter(x=combined_df['MJD'], y=combined_df['Clock_Diff'], mode='lines+markers', name='Clock Data'))
     elif residual_type == 'Linear Residuals':
         fig.add_trace(go.Scatter(x=combined_df['MJD'], y=combined_df['Linear_Residuals'], mode='lines+markers', name='Linear Residuals'))
@@ -164,16 +173,30 @@ def plot_clock_differences(df, tai_code, step_data=None, step_correction_options
 
     fig.update_layout(
         title=f'MJD vs {residual_type} for the clock {tai_code}',
-        xaxis_title='MJD',
-        yaxis=dict(title=f'{residual_type} (ns)' if residual_type != 'None' else 'Clock Difference (ns)'),
+        xaxis=dict(
+            title='MJD',
+            title_font=dict(size=18),  # Adjust size as needed
+            tickfont=dict(size=14)     # Adjust size as needed
+        ),
+        yaxis=dict(
+            title=f'{residual_type} (ns)' if residual_type != 'None' else 'Clock Difference (ns)',
+            title_font=dict(size=18),  # Adjust size as needed
+            tickfont=dict(size=14)     # Adjust size as needed
+        ),
         legend_title='Data Series',
-        font=dict(size=44)
+        font=dict(size=44)  # This sets the font size for the rest of the figure components
     )
-
+    fig.update_xaxes(tickformat="05d")
     return fig
 
 # Main Streamlit app
 def main():
+    
+    # Initialize 'step_correction_counter' in st.session_state
+    if 'step_correction_counter' not in st.session_state:
+        st.session_state['step_correction_counter'] = 0
+        
+        
     with st.form("my-form1", clear_on_submit=True):
         files_01 = st.file_uploader("Upload the clock data files", accept_multiple_files=True)
         submitted1 = st.form_submit_button("Submit")
@@ -184,6 +207,7 @@ def main():
         st.session_state['combined_steps'] = combined_steps
 
     selected_code = None  # Initialize selected_code
+    step_correction_options = None
     
     if 'combined_data' in st.session_state and not st.session_state['combined_data'].empty:
         tai_code_columns = [col for col in st.session_state['combined_data'].columns if 'TAI_Code' in col]
@@ -191,21 +215,61 @@ def main():
         all_tai_codes = [code for code in all_tai_codes if code != 0]
 
         selected_code = st.radio("Select a clock", all_tai_codes, key='tai_code_selection', horizontal=True)
+        # step_correction_options= None
 
     if 'combined_steps' in st.session_state and not st.session_state['combined_steps'].empty:
-        st.write("Step Corrections:")
-        st.write(st.session_state['combined_steps'])
-        st.write("Verify the clock step corrections:")
-        # Table of radio buttons for step correction options
-        time_step_selection = st.radio("Time Step", ["Not Apply", "Apply", "Apply Reverse"], key='time_step')
-        freq_step_selection = st.radio("Freq Step", ["Not Apply", "Apply", "Apply Reverse"], key='freq_step')
+        # Arrange step correction radio buttons in columns
 
-        step_correction_options = (time_step_selection, freq_step_selection)
+        
+        # Filter step corrections for the selected clock
+        filtered_steps = st.session_state['combined_steps'][st.session_state['combined_steps']['Clock_Code'] == str(selected_code)]
 
+        
+       
+        # Check if the selected clock matches any Clock_Code in step data
+        if str(selected_code) in st.session_state['combined_steps']['Clock_Code'].unique():
+            # st.write("Step Corrections:")
+            # st.write(st.session_state['combined_steps'])
+            # Ensure the types are consistent
+            st.session_state['combined_steps']['Clock_Code'] = st.session_state['combined_steps']['Clock_Code'].astype(str)
 
+            if str(selected_code) in st.session_state['combined_steps']['Clock_Code'].unique():
+                st.write("Steps corrections mentioned in the data for this clock:")
+                st.write(st.session_state['combined_steps'][st.session_state['combined_steps']['Clock_Code'] == str(selected_code)])
+                st.write("Verify the step corrections in this clock")
+                          
+                with st.container():
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        time_step_selection = st.radio("Time Step", ["Not Apply", "Apply", "Apply Reverse"], key='time_step')
+                    with col2:
+                        freq_step_selection = st.radio("Freq Step", ["Not Apply", "Apply", "Apply Reverse"], key='freq_step')
+                step_correction_options = (time_step_selection, freq_step_selection)
+        
+        if 'step_correction_counter' not in st.session_state:
+                st.session_state['step_correction_counter'] = 0
+                
+        # Check if there are more than one step corrections for the selected clock
+        if len(filtered_steps) > 1:
+            # Initialize the step correction counter if not already done
+            if 'step_correction_counter' not in st.session_state:
+                st.session_state['step_correction_counter'] = 0
+
+            # Display increment and decrement buttons
+            st.write("Apply corrections one after the other sequencially ")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Apply Previous Step Correction"):
+                    st.session_state['step_correction_counter'] = max(0, st.session_state['step_correction_counter'] - 1)
+            with col2:
+                if st.button("Apply Next Step Correction"):
+                    st.session_state['step_correction_counter'] = min(len(filtered_steps) - 1, st.session_state['step_correction_counter'] + 1)
+
+            st.write(f"Step Corrections applied sequentially: {st.session_state['step_correction_counter']}")
+        
     # Check if a code is selected before plotting
     if selected_code is not None:
-        fig = plot_clock_differences(st.session_state['combined_data'], selected_code,st.session_state['combined_steps'], step_correction_options)
+        fig = plot_clock_differences(st.session_state['combined_data'], selected_code,st.session_state['combined_steps'], step_correction_options, st.session_state['step_correction_counter'])
         if fig:
             st.plotly_chart(fig, use_container_width=True)
         else:
