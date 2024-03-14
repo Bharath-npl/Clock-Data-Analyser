@@ -298,7 +298,13 @@ def main():
     
     if 'combined_data' in st.session_state and not st.session_state['combined_data'].empty:
         tai_code_columns = [col for col in st.session_state['combined_data'].columns if 'TAI_Code' in col]
-        all_tai_codes = pd.unique(st.session_state['combined_data'][tai_code_columns].fillna(0).astype(int).values.ravel('K'))
+        all_tai_codes = pd.unique(
+            st.session_state['combined_data'][tai_code_columns]
+            .fillna('0')  # Fill NaNs with '0'
+            .applymap(lambda x: str(x).replace(' ', ''))  # Convert to string and remove spaces for all elements
+            .astype(int)  # Convert to integer
+            .values.ravel('K')
+            )
         all_tai_codes = [code for code in all_tai_codes if code != 0]
 
         selected_code = st.radio(":white_square_button: **Select a clock**", all_tai_codes, key='tai_code_selection', horizontal=True )
