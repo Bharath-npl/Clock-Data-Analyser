@@ -79,7 +79,10 @@ def parse_clock_data(file_objects):
                 
                 # Check for step data format
                 # Regex format to correctly parse step data
-                step_match = re.match(r'(\d{5}(?:\.\d{2})?)\s+(\d{7})\s+([+-]?\d+\.\d+)\s+([+-]?\d+\.\d+)\s+(\w+)\s+(\d{5})', line.strip())
+                # step_match = re.match(r'(\d{5}(?:\.\d{2})?)\s+(\d{7})\s+([+-]?\d+\.\d+)\s+([+-]?\d+\.\d+)\s+(\w+)\s+(\d{5})', line.strip())
+                # step_match = re.match(r'(\d{5}(?:\.\d+)?)\s+(\d{7})\s+([+-]?\d+\.\d+)\s+([+-]?\d+\.\d+)\s+(\w+)\s+(\d{5})', line.strip())
+                step_match = re.match(r'(\d{5}(?:\.\d+)?)\s+(\d{7})\s+([+-]?\d+\.\d+)\s+([+-]?\d+\.\d+)\s+(\w+)\s+(\d{5})', line.strip())
+
                 if step_match:
                     # If a match is found, process the step data
                     step_frames.append(step_match.groups())
@@ -301,6 +304,7 @@ def main():
         all_tai_codes = pd.unique(
             st.session_state['combined_data'][tai_code_columns]
             .fillna('0')  # Fill NaNs with '0'
+            # .astype(float)
             .applymap(lambda x: str(x).replace(' ', ''))  # Convert to string and remove spaces for all elements
             .astype(int)  # Convert to integer
             .values.ravel('K')
