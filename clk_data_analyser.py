@@ -429,7 +429,7 @@ def main():
             st.write("No data available for the selected TAI Code.")
 
             # Option to, print the DataFrame to output for verification
-        if not verify_data.empty:
+        if not verify_data.empty and step_counter != 0:
             
             verify_colm1, verify_colm2 = st.columns([3,7])
             
