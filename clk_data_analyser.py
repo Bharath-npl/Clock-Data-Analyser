@@ -52,11 +52,12 @@ st.sidebar.write("")
 def parse_clock_data(file_objects):
     data_frames = []  # For storing each parsed line of clock data
     step_frames = []  # For storing each parsed line of step correction data
-
-    # Regex pattern for clock data lines, adapted to handle optional repeating groups
-    clock_data_pattern = re.compile(
-        r'(\d{5})\s+(\d{5})\s+(\d{7})\s+([+-]?\d+\.\d+)((?:\s+\d{7}\s+[+-]?\d+\.\d+){0,5})'
-    )
+    aggregated_data = []
+    # Store data as a list of dictionaries, one per MJD
+    data_by_mjd = {}
+    # Regex pattern for clock data lines
+    clock_data_pattern = re.compile(r'(\d{5})\s+(\d{5})\s+(\d{7})\s+([+-]?\d+\.\d+)((?:\s+\d{7}\s+[+-]?\d+\.\d+){0,5})')
+    additional_data_pattern = re.compile(r'(\d{7})\s+([+-]?\d+\.\d+)')
 
     # Regex pattern for step data format
     step_data_pattern = re.compile(
@@ -78,29 +79,38 @@ def parse_clock_data(file_objects):
 
                 clock_match = clock_data_pattern.match(line.strip())
                 if clock_match:
-                    mjd, lab_code, ta_code, utc_ta_lab_diff, additional_data = clock_match.groups()
-                    additional_data_matches = re.findall(r'(\d{7})\s+([+-]?\d+\.\d+)', additional_data)
+                    # mjd, lab_code, ta_code, utc_ta_lab_diff, additional_data = clock_match.groups()
+                    # additional_data_matches = re.findall(r'(\d{7})\s+([+-]?\d+\.\d+)', additional_data)
                     
-                    # Construct the initial row with first TAI_Code and Clock_Diff
-                    row_data = {
-                        'MJD': mjd,
-                        'Lab_Code': lab_code,
-                        'TAI_Code_1': ta_code,
-                        'Clock_Diff_1': utc_ta_lab_diff,
-                    }
 
-                    # Add additional TAI_Code and Clock_Diff pairs, if any
-                    for i, match in enumerate(additional_data_matches, start=2):
-                        tai_code, clock_diff = match
-                        row_data[f'TAI_Code_{i}'] = tai_code
-                        row_data[f'Clock_Diff_{i}'] = clock_diff
+                    mjd, lab_code, first_ta_code, first_clock_diff, additional_data = clock_match.groups()
+                    additional_data_matches = additional_data_pattern.findall(additional_data)
+                    
+                    if mjd not in data_by_mjd:
+                        data_by_mjd[mjd] = {'MJD': mjd, 'Lab_Code': lab_code, 'TAI_Codes': [], 'Clock_Diffs': []}
+                    
+                    # Add the first TAI_Code and Clock_Diff
+                    data_by_mjd[mjd]['TAI_Codes'].append(first_ta_code)
+                    data_by_mjd[mjd]['Clock_Diffs'].append(first_clock_diff)
 
-                    data_frames.append(row_data)
+                    # Add additional TAI_Code and Clock_Diff pairs
+                    for tai_code, clock_diff in additional_data_matches:
+                        data_by_mjd[mjd]['TAI_Codes'].append(tai_code)
+                        data_by_mjd[mjd]['Clock_Diffs'].append(clock_diff)
 
         except Exception as e:
             print(f"Error processing file {file_object.name}: {e}")
 
-    combined_data = pd.DataFrame(data_frames)
+    # Convert data_by_mjd to a DataFrame with dynamic columns for TAI_Codes and Clock_Diffs
+    rows = []
+    for mjd, data in data_by_mjd.items():
+        row = {'MJD': data['MJD'], 'Lab_Code': data['Lab_Code']}
+        for i, (tai_code, clock_diff) in enumerate(zip(data['TAI_Codes'], data['Clock_Diffs']), start=1):
+            row[f'TAI_Code_{i}'] = tai_code
+            row[f'Clock_Diff_{i}'] = clock_diff
+        rows.append(row)
+
+    combined_data = pd.DataFrame(rows)
     combined_steps = pd.DataFrame(step_frames, columns=['MJD', 'Clock_Code', 'Time_Step', 'Frequency_Step', 'Lab_Acronym', 'Lab_Code']) if step_frames else pd.DataFrame()
     # st.write(combined_data)
     return combined_data, combined_steps
@@ -151,35 +161,59 @@ def plot_clock_differences(df, tai_code, step_data, step_correction_options, ste
     df['MJD'] = pd.to_numeric(df['MJD'], errors='coerce')
     df.sort_values(by='MJD', inplace=True)
 
+        # Adjusted to ensure Clock_Diff columns are floats for calculations
+    for col in [c for c in df.columns if 'Clock_Diff' in c]:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+
     # Initialize lists to collect combined MJD and Clock Differences
     mjd_combined = []
     clock_diff_combined = []
-
+    fig = None
+    comparison_df = pd.DataFrame()
+    
+    # tai_code_str = f"{tai_code}"
     # Dynamically find TAI code columns and their corresponding Clock Diff columns
-    tai_code_columns = [col for col in df.columns if 'TAI_Code' in col]
-    clock_diff_columns = [col.replace('TAI_Code', 'Clock_Diff') for col in tai_code_columns]
+    # tai_code_columns = [col for col in df.columns if 'TAI_Code' in col]
+    # clock_diff_columns = [col.replace('TAI_Code', 'Clock_Diff') for col in tai_code_columns]
+    
+    # Adjusting for specific TAI code filtering, considering leading zeros
+    # tai_code_str = str(tai_code) if str(tai_code).startswith('20') else tai_code
+    # tai_code_str = f"{tai_code}"
+ 
+    tai_code_numeric = int(tai_code)  # Convert tai_code to integer
+    # make sure TAI code columns are numeric for accurate comparison
+    tai_code_columns = df.filter(like='TAI_Code').columns
+    for col in tai_code_columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    # Iterate over pairs of TAI code and Clock Diff columns to collect relevant data
+
+        # Ensure Clock Diff columns are numeric for any calculations
+    clock_diff_columns = df.filter(like='Clock_Diff').columns
+    for col in clock_diff_columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # Filtering DataFrame for the specified TAI code
     for tai_col, clock_diff_col in zip(tai_code_columns, clock_diff_columns):
-        if tai_col in df.columns and clock_diff_col in df.columns:
-            # Filter rows where the current TAI code column matches the specified TAI code
-            subset = df[df[tai_col].astype(str) == str(tai_code)]
-            if not subset.empty:
-                # Collect MJD and Clock Difference values from the subset
-                mjd_combined.extend(subset['MJD'].tolist())
-                clock_diff_combined.extend(subset[clock_diff_col].tolist())
+        subset = df[df[tai_col] == tai_code_numeric]  # Numeric comparison
+        if not subset.empty:
+            mjd_combined.extend(subset['MJD'])
+            clock_diff_combined.extend(subset[clock_diff_col])
+
 
     # Construct a DataFrame from the collected data
     combined_df = pd.DataFrame({
         'MJD': mjd_combined,
         'Clock_Diff': clock_diff_combined
-    }).drop_duplicates().sort_values(by='MJD')
+    }).dropna().drop_duplicates().sort_values(by='MJD')
 
-
+    # st.write("combined df")
+    # st.write(combined_df)
+    # st.write(combined_df)
      # Create a copy to preserve original 'Clock_Diff' before corrections
     combined_df['original_Clock_Diff'] = combined_df['Clock_Diff'].copy()
     
-    # st.write(combined_df['MJD'])
+    
 
     if step_data is not None and step_correction_options is not None:
         # st.write(f"step_correction_option zero Time Step: {step_correction_options[3][0]}")
@@ -189,7 +223,7 @@ def plot_clock_differences(df, tai_code, step_data, step_correction_options, ste
     # Ensure there's data to plot
     if not combined_df.empty:
         # st.write("Processing data for plotting ")
-
+        
         # Ensure MJD and Clock_Diff columns are numeric and drop any NaN values
         combined_df['MJD'] = pd.to_numeric(combined_df['MJD'], errors='coerce')
         combined_df['Clock_Diff'] = pd.to_numeric(combined_df['Clock_Diff'], errors='coerce')
@@ -266,7 +300,7 @@ def main():
 
 
 
-    valid_filenames = []
+    
     step_correction_options = []
     step_counter= 0
     # Initialize 'step_correction_counter' in st.session_state
@@ -279,7 +313,7 @@ def main():
         submitted1 = st.form_submit_button("Submit")
     
     if files_01:
-        
+        valid_filenames = []
         # Extract filenames and store them in a list
         filenames = [file.name for file in files_01]
         
@@ -306,8 +340,32 @@ def main():
         all_tai_codes = pd.unique(st.session_state['combined_data'][tai_code_columns].fillna(0).astype(int).values.ravel('K'))
         all_tai_codes = [code for code in all_tai_codes if code != 0]
 
-        selected_code = st.radio(":white_square_button: **Select a clock**", all_tai_codes, key='tai_code_selection', horizontal=True )
+        # Preprocess TAI codes to append the label based on the prefix or specific format
+        processed_tai_codes = []
+        for tai_code in all_tai_codes:
+            tai_code_str = str(tai_code)
+            label_suffix = ""
+            if tai_code_str.startswith('14'):
+                label_suffix = " (HM)"
+            elif tai_code_str.startswith('13'):
+                label_suffix = " (Cs)"
+            elif tai_code_str.startswith('20') or tai_code_str[:5] == '00200':
+                label_suffix = " [UTC(lab) - TA(Lab)]"
+            elif tai_code_str.startswith('12'):
+                label_suffix = " (Cs_Osa)"
+            elif tai_code_str.startswith('19'):
+                label_suffix = " (Cs_Fon)"
+            elif tai_code_str.startswith('18'):
+                label_suffix = " (Sr)"
+            else:
+                label_suffix = " (New)"
+            processed_tai_codes.append(f"{tai_code}{label_suffix}")
+
+        # st.write(all_tai_codes)
+        selected_code_label = st.radio(":white_square_button: **Select a clock**", processed_tai_codes, key='tai_code_selection', horizontal=True )
         # step_correction_options= None
+        # To extract just the numeric part of the selected code for further processing:
+        selected_code = selected_code_label.split()[0]
 
     if 'combined_steps' in st.session_state and not st.session_state['combined_steps'].empty:
               
@@ -322,6 +380,7 @@ def main():
         # Check if the selected clock matches any Clock_Code in step data
         if str(selected_code) in st.session_state['combined_steps']['Clock_Code'].unique():
             st.session_state['combined_steps']['Clock_Code'] = st.session_state['combined_steps']['Clock_Code'].astype(str)
+            # st.write(st.session_state['combined_steps']['Clock_Code'])
 
             if str(selected_code) in st.session_state['combined_steps']['Clock_Code'].unique():
                 filtered_steps = filtered_steps.sort_values(by=filtered_steps.columns[0]) # Arrange the filtered steps in ascending order of their MJD 
@@ -356,10 +415,30 @@ def main():
                         st.table(filtered_steps)
 
                 with main_col2:
-
+                    
                     with st.expander(":large_orange_diamond: **Apply the step corrections to this clock**"):
-                
+                        
+                        # Custom CSS to reduce spacing
+                        st.markdown("""
+                            <style>
+                            /* Target the container of the radio button group and reduce bottom margin */
+                            .stRadio > div {
+                                margin-bottom: -10px !important;
+                            }
+
+                            # /* Adjust the spacing around the label of each radio button, if needed */
+                            # .stRadio label {
+                            #     margin-bottom: -5px !important;
+                            #     display: block;
+                            # }
+
+                            /* You can also target other elements within the radio button group to adjust spacing */
+                            </style>
+                            """, unsafe_allow_html=True)
+
+
                         if len(filtered_steps) > 0:
+
                             # Display labels once, above the first row
                             col1_space, col1, col2_space, col2, col3_space = st.columns([1.5, 2, 3, 2, 1])
                             with col1:
@@ -370,20 +449,20 @@ def main():
                             # Initialize manual index for display purposes
                             display_index = 0
                             
-                            st.markdown("""
-                                <style>
-                                /* Attempt to reduce spacing between Streamlit widgets, including radio buttons */
-                                .stRadio > div {
-                                    margin-bottom: -20px !important;
-                                }
-                                /* Further reduce spacing around the markdown used for indexes */
-                                .stMarkdown {
-                                    margin-bottom: -15px !important;
-                                    padding-top: 0px !important;
-                                    padding-bottom: 0px !important;
-                                }
-                                </style>
-                                """, unsafe_allow_html=True)
+                            # st.markdown("""
+                            #     <style>
+                            #     /* Attempt to reduce spacing between Streamlit widgets, including radio buttons */
+                            #     .stRadio > div {
+                            #         margin-bottom: -20px !important;
+                            #     }
+                            #     /* Further reduce spacing around the markdown used for indexes */
+                            #     .stMarkdown {
+                            #         margin-bottom: -15px !important;
+                            #         padding-top: 0px !important;
+                            #         padding-bottom: 0px !important;
+                            #     }
+                            #     </style>
+                            #     """, unsafe_allow_html=True)
                             
                             # Iterate over the rows of the DataFrame to create dynamic rows of radio buttons without repeating labels
                             for _, row in filtered_steps.iterrows():
@@ -422,7 +501,10 @@ def main():
 
     # Check if a code is selected before plotting
     if selected_code is not None:
-        fig, verify_data = plot_clock_differences(st.session_state['combined_data'], selected_code,st.session_state['combined_steps'], step_correction_options, step_counter)
+        # st.write(st.session_state['combined_data']['Clock_Diff_1'])
+        # st.write(selected_code)
+        fig, verify_data = plot_clock_differences(st.session_state['combined_data'], selected_code, st.session_state['combined_steps'], step_correction_options, step_counter)
+
         if fig:
             st.plotly_chart(fig, use_container_width=True)
         else:
